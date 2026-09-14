@@ -70,8 +70,18 @@ async function pool<T, R>(items: T[], worker: (item: T, i: number) => Promise<R>
   return results;
 }
 
-function classify(col: Col): { billable: boolean; kind: string; conditional: boolean } {
-  if (col.type !== "action") return { billable: false, kind: col.type, conditional: false };
+// Default heuristic for an integrated (single-column) waterfall. The public CLI
+// exposes no provider/step list, so detection is name-based only. Kept tight
+// (literal "waterfall") to avoid flagging separate Find/Validate build columns;
+// widen it with --waterfall-pattern when your integrated columns are named e.g.
+// "Find Work Email".
+const DEFAULT_WATERFALL_PATTERN = /waterfall/i;
+
+function classify(
+  col: Col,
+  waterfallPattern: RegExp,
+): { billable: boolean; kind: string; conditional: boolean; waterfall: boolean } {
+  if (col.type !== "action") return { billable: false, kind: col.type, conditional: false, waterfall: false };
   const s = col.settings ?? {};
   const conditional =
     typeof s.conditionalRunFormulaText === "string" && s.conditionalRunFormulaText.trim().length > 0;
@@ -84,7 +94,9 @@ function classify(col: Col): { billable: boolean; kind: string; conditional: boo
   if (isAI) kind = "AI";
   else if (/export|send|sync|hubspot|salesforce|webhook|slack|notion|sequenc|campaign|push|ads?\b/i.test(col.name))
     kind = "GTM export";
-  return { billable: true, kind, conditional };
+  // A waterfall candidate is an enrichment column whose name matches the pattern.
+  const waterfall = kind === "Enrichment" && waterfallPattern.test(col.name);
+  return { billable: true, kind, conditional, waterfall };
 }
 
 type Opts = {
@@ -93,6 +105,8 @@ type Opts = {
   rowsOverride?: number;
   dcPerEnrichment: number;
   concurrency: number;
+  waterfallSteps: number;
+  waterfallPattern: RegExp;
 };
 
 type TableEstimate = {
@@ -107,10 +121,13 @@ type TableEstimate = {
     kind: string;
     billable: boolean;
     conditional: boolean;
+    waterfall: boolean;
+    steps: number;
     fireRate: number;
     actions: number;
   }[];
   actionColumnCount: number;
+  waterfallColumnCount: number;
   maxActions: number;
   expectedActions: number;
   enrichmentColumnCount: number;
@@ -138,15 +155,19 @@ async function estimateTable(
     cols = Array.isArray(listResp?.data) ? listResp.data : [];
   }
   const columns = cols.map((c) => {
-    const { billable, kind, conditional } = classify(c);
+    const { billable, kind, conditional, waterfall } = classify(c, opts.waterfallPattern);
     const fireRate = !billable ? 0 : conditional ? opts.conditionalRate : opts.hitRate;
-    return { name: c.name, type: c.type, kind, billable, conditional, fireRate, actions: Math.round(rows * fireRate) };
+    // An integrated waterfall bills per returning provider + validation step; model
+    // that with a step multiplier (default 1 = one Action, i.e. unchanged).
+    const steps = billable && waterfall ? opts.waterfallSteps : 1;
+    return { name: c.name, type: c.type, kind, billable, conditional, waterfall, steps, fireRate, actions: Math.round(rows * fireRate * steps) };
   });
 
   const actionCols = columns.filter((c) => c.billable);
   const enrichmentColumnCount = actionCols.filter((c) => c.kind === "Enrichment").length;
+  const waterfallColumnCount = actionCols.filter((c) => c.waterfall).length;
   const expectedActions = actionCols.reduce((s, c) => s + c.actions, 0);
-  const maxActions = rows * actionCols.length;
+  const maxActions = actionCols.reduce((s, c) => s + rows * c.steps, 0);
   const dataCredits =
     opts.dcPerEnrichment > 0 ? Math.round(rows * opts.hitRate * enrichmentColumnCount * opts.dcPerEnrichment) : 0;
 
@@ -158,6 +179,7 @@ async function estimateTable(
     rowsOverridden: opts.rowsOverride != null,
     columns,
     actionColumnCount: actionCols.length,
+    waterfallColumnCount,
     maxActions,
     expectedActions,
     enrichmentColumnCount,
@@ -207,8 +229,9 @@ function printTable(t: TableEstimate) {
     const wName = Math.max(6, ...billable.map((c) => c.name.length));
     console.log(`  ${pad("Column", wName)}  ${pad("Kind", 11)}  Fire   Actions`);
     for (const c of billable) {
-      const flag = c.conditional ? "*" : " ";
-      console.log(`  ${pad(c.name, wName)}  ${pad(c.kind, 11)}  ${padL(pct(c.fireRate), 4)}${flag}  ${padL(n(c.actions), 8)}`);
+      const flag = c.waterfall && c.steps > 1 ? "≈" : c.conditional ? "*" : " ";
+      const kindLabel = c.waterfall ? `${c.kind} (wf×${c.steps})` : c.kind;
+      console.log(`  ${pad(c.name, wName)}  ${pad(kindLabel, 11)}  ${padL(pct(c.fireRate), 4)}${flag}  ${padL(n(c.actions), 8)}`);
     }
   } else {
     console.log("  (no action columns — 0 Actions)");
@@ -218,6 +241,8 @@ function printTable(t: TableEstimate) {
     console.log(`  Free columns (0 Actions): ${free.length} (${[...new Set(free.map((c) => c.type))].join(", ")})`);
   console.log(`  → Expected Actions: ${n(t.expectedActions)}   (max at 100% fire: ${n(t.maxActions)})`);
   if (t.dataCredits > 0) console.log(`  → Rough Data Credits: ~${n(t.dataCredits)} (assumption-based)`);
+  if (t.waterfallColumnCount > 0 && t.columns.every((c) => c.steps === 1))
+    console.log(`  ℹ ${t.waterfallColumnCount} waterfall-named column(s) counted as 1 Action each — pass --waterfall-steps <n> to model per-step billing.`);
 }
 
 // ---------------------------------------------------------------- CSV
@@ -232,6 +257,7 @@ const CSV_COLS = [
   "rows",
   "action_columns",
   "enrichment_columns",
+  "waterfall_columns",
   "expected_actions",
   "max_actions",
   "data_credits",
@@ -256,6 +282,7 @@ function emitCsv(tables: TableEstimate[]) {
       rows: t.rows,
       action_columns: t.actionColumnCount,
       enrichment_columns: t.enrichmentColumnCount,
+      waterfall_columns: t.waterfallColumnCount,
       expected_actions: t.expectedActions,
       max_actions: t.maxActions,
       data_credits: t.dataCredits,
@@ -454,6 +481,9 @@ Options:
       --top <n>                 Rows to show per ranking in --workspace (default 20)
       --min-actions <n>         Hide tables below this Action load in --workspace (default 0)
       --concurrency <n>         Parallel clay calls (default 8)
+      --waterfall-steps <n>     Actions billed per integrated-waterfall column (default 1). Models a
+                                single multi-provider column that bills per returning + validation step.
+      --waterfall-pattern <re>  Case-insensitive regex naming integrated-waterfall columns (default: waterfall)
       --json                    Emit JSON
       --csv                     Emit CSV (one row per table, ranked by expected Actions) to stdout
   -h, --help                    This help
@@ -463,15 +493,17 @@ Examples:
   bun estimate.ts t_yourTableId --hit-rate 0.8 --conditional-rate 0.5
   bun estimate.ts --workspace --hit-rate 0.7 --top 15
   bun estimate.ts --workspace --json > workspace-actions.json
+  bun estimate.ts wb_yourWorkbookId --waterfall-steps 3 --waterfall-pattern "find.*email|waterfall"
 
 * Actions bill 1 per record per action column, on success only. basic/source columns are free.
-  A "*" marks a conditional column (runs on a subset of rows).`);
+  A "*" marks a conditional column; "≈" a waterfall column billed at >1 step.
+  The CLI exposes no provider list, so waterfall detection is name-based — verify against a real run.`);
 }
 
 // ---------------------------------------------------------------- main
 async function main() {
   const argv = process.argv.slice(2);
-  const opts: Opts = { hitRate: 1.0, conditionalRate: NaN, rowsOverride: undefined, dcPerEnrichment: 0, concurrency: 8 };
+  const opts: Opts = { hitRate: 1.0, conditionalRate: NaN, rowsOverride: undefined, dcPerEnrichment: 0, concurrency: 8, waterfallSteps: 1, waterfallPattern: DEFAULT_WATERFALL_PATTERN };
   let id: string | undefined;
   let workspace = false;
   let json = false;
@@ -488,7 +520,15 @@ async function main() {
     else if (a === "--rows") opts.rowsOverride = parseInt(next(), 10);
     else if (a === "--dc-per-enrichment") opts.dcPerEnrichment = parseFloat(next());
     else if (a === "--concurrency") opts.concurrency = Math.max(1, parseInt(next(), 10) || 8);
-    else if (a === "--workspace" || a === "--all") workspace = true;
+    else if (a === "--waterfall-steps") opts.waterfallSteps = Math.max(1, parseFloat(next()) || 1);
+    else if (a === "--waterfall-pattern") {
+      const raw = next();
+      try {
+        opts.waterfallPattern = new RegExp(raw, "i");
+      } catch {
+        throw new Error(`Invalid --waterfall-pattern regex: ${raw}`);
+      }
+    } else if (a === "--workspace" || a === "--all") workspace = true;
     else if (a === "--top") top = Math.max(1, parseInt(next(), 10) || 20);
     else if (a === "--min-actions") minActions = Math.max(0, parseInt(next(), 10) || 0);
     else if (a === "--json") json = true;

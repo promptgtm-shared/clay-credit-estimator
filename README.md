@@ -14,7 +14,7 @@ Per [Clay University — Actions & Data Credits](https://university.clay.com/doc
 
 - Each **action** column costs **1 Action per record it runs on**, regardless of provider (including when you bring your own API key).
 - **basic** (plain / formula) and **source** (sourcing / import) columns cost **0 Actions**.
-- Only steps that **return data** are billed — a provider step that returns nothing or errors is free, so 100% fire is an upper bound. A waterfall bills **1 Action per returning provider step _and_ per validation step**, up to the one that validates (a validator bills on a valid *or* invalid result). Because Clay waterfalls are usually built as separate `Find` + `Validate` columns, counting each action column as 1 Action/row is accurate; a single **integrated** multi-provider waterfall column can bill more than 1 Action/row, which this tool would under-count.
+- Only steps that **return data** are billed — a provider step that returns nothing or errors is free, so 100% fire is an upper bound. A waterfall bills **1 Action per returning provider step _and_ per validation step**, up to the one that validates (a validator bills on a valid *or* invalid result). Because Clay waterfalls are usually built as separate `Find` + `Validate` columns, counting each action column as 1 Action/row is accurate; a single **integrated** multi-provider waterfall column can bill more than 1 Action/row. The CLI exposes no provider list, so integrated waterfalls can't be detected structurally — use `--waterfall-steps` with `--waterfall-pattern` to model them by name (default multiplier is 1, i.e. no change).
 - A column with a run condition fires on a subset of rows; it's flagged and discounted separately.
 - **Data Credits** (marketplace data cost) are provider-dependent and can't be read from the CLI, so they're off by default; `--dc-per-enrichment` gives a rough, clearly-labeled estimate.
 
@@ -45,6 +45,8 @@ bun estimate.ts --workspace [options]            # rank every workbook & table
 | `--top <n>` | `20` | Rows shown per ranking in `--workspace`. |
 | `--min-actions <n>` | `0` | Hide tables below this Action load in `--workspace`. |
 | `--concurrency <n>` | `8` | Parallel `clay` calls. |
+| `--waterfall-steps <n>` | `1` | Actions billed per integrated-waterfall column (name-based; `1` = no change). |
+| `--waterfall-pattern <regex>` | `waterfall` | Case-insensitive regex naming integrated-waterfall columns (e.g. `"find.*email\|waterfall"`); enrichment columns only. |
 | `--json` | — | Machine-readable output. |
 | `--csv` | — | CSV to stdout, one row per table, ranked by expected Actions. |
 
@@ -69,7 +71,9 @@ bun estimate.ts --workspace --hit-rate 0.75 --top 15
 bun estimate.ts --workspace --hit-rate 0.75 --min-actions 100 --csv > workspace-actions.csv
 ```
 
-CSV columns: `rank, workbook_id, workbook_name, table_id, table_name, rows, action_columns, enrichment_columns, expected_actions, max_actions, data_credits`.
+CSV columns: `rank, workbook_id, workbook_name, table_id, table_name, rows, action_columns, enrichment_columns, waterfall_columns, expected_actions, max_actions, data_credits`.
+
+Waterfall detection is **name-based** (`≈` marks a column billed at >1 step): the public CLI never names the underlying provider, so the tool cannot tell an integrated waterfall from a single-provider column or count its internal steps. Treat `--waterfall-steps` as a modelling assumption and verify against a real run.
 
 ## How it classifies columns
 

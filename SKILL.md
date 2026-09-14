@@ -13,7 +13,7 @@ thing users mean by "action credits."
 
 - Each **`action` column** costs **1 Action per record it runs on**, regardless of provider (including when you use your own API key).
 - **`basic`** (plain / formula) and **`source`** (sourcing / import) columns cost **0 Actions**.
-- Only steps that **return data** are billed — a provider step that returns nothing or errors is free, so a 100% fire rate is an upper bound. A waterfall bills **1 Action per returning provider step _and_ per validation step**, up to the one that validates (a validator bills on a valid *or* invalid result). Because Clay waterfalls are usually built as separate `Find` + `Validate` columns, counting each action column as 1 Action/row is accurate; a single **integrated** multi-provider waterfall column can bill more than 1 Action/row, which this tool would under-count.
+- Only steps that **return data** are billed — a provider step that returns nothing or errors is free, so a 100% fire rate is an upper bound. A waterfall bills **1 Action per returning provider step _and_ per validation step**, up to the one that validates (a validator bills on a valid *or* invalid result). Because Clay waterfalls are usually built as separate `Find` + `Validate` columns, counting each action column as 1 Action/row is accurate; a single **integrated** multi-provider waterfall column can bill more than 1 Action/row. The CLI exposes no provider list, so integrated waterfalls can't be detected structurally — use `--waterfall-steps` with `--waterfall-pattern` to model them by name (default multiplier is 1, i.e. no change).
 - A column with a **run condition** (`conditionalRunFormulaText`) only fires on a subset of rows; the script flags it (`*`) and discounts it by `--conditional-rate`.
 - **Data Credits** (marketplace data cost) are provider-dependent and cannot be read from the CLI, so they're **off by default**; `--dc-per-enrichment` gives a rough, clearly-labeled estimate.
 
@@ -38,11 +38,15 @@ Options:
 | `--top <n>` | `20` | Rows shown per ranking in `--workspace`. |
 | `--min-actions <n>` | `0` | Hide tables below this Action load in `--workspace`. |
 | `--concurrency <n>` | `8` | Parallel `clay` calls (WSL-shim spawns are slow; ~2 calls per table). |
+| `--waterfall-steps <n>` | `1` | Actions billed per integrated-waterfall column. Models one multi-provider column that bills per returning + validation step. `1` = no change. |
+| `--waterfall-pattern <regex>` | `waterfall` | Case-insensitive regex naming integrated-waterfall columns (e.g. `"find.*email\|waterfall"`). Only enrichment columns match. |
 | `--json` | — | Machine-readable output. |
 | `--csv` | — | CSV to stdout — one row per table, ranked by expected Actions. Works in every mode; pair with `--workspace` to slice in a spreadsheet. |
 | `-h, --help` | — | Help. |
 
-CSV columns: `rank, workbook_id, workbook_name, table_id, table_name, rows, action_columns, enrichment_columns, expected_actions, max_actions, data_credits`. `--json` and `--csv` are mutually exclusive.
+CSV columns: `rank, workbook_id, workbook_name, table_id, table_name, rows, action_columns, enrichment_columns, waterfall_columns, expected_actions, max_actions, data_credits`. `--json` and `--csv` are mutually exclusive.
+
+**Waterfall detection is name-based** (`≈` marks a column billed at >1 step): the public CLI never names the underlying provider, so the tool cannot tell an integrated waterfall from a single-provider column, nor count its internal steps. Treat `--waterfall-steps` as a modelling assumption and verify against a real run.
 
 ## Examples
 
@@ -63,6 +67,9 @@ bun estimate.ts --workspace --json > workspace-actions.json
 # CSV for a spreadsheet (only tables above 100 Actions), or for one workbook
 bun estimate.ts --workspace --hit-rate 0.8 --min-actions 100 --csv > workspace-actions.csv
 bun estimate.ts wb_yourWorkbookId --csv > workbook-actions.csv
+
+# Model integrated waterfalls: treat "Find … Email" columns as ~3 billed steps each
+bun estimate.ts t_yourTableId --waterfall-pattern "find.*email|waterfall" --waterfall-steps 3
 ```
 
 The `--workspace` scan is read-only and can take a couple of minutes on a large workspace (hundreds of tables). It prints progress to stderr, ranks **workbooks** then **tables** by expected Actions, and reports a workspace total. Tables the CLI can't read (unsupported/archive types) are skipped and listed at the end.
