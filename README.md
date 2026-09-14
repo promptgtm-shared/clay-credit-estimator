@@ -1,5 +1,10 @@
 # clay-credit-estimator
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Runtime: Bun](https://img.shields.io/badge/runtime-Bun-black?logo=bun&logoColor=white)
+![Claude Code skill](https://img.shields.io/badge/Claude%20Code-skill-8A2BE2)
+![Clay official CLI](https://img.shields.io/badge/Clay-official%20CLI-6C5CE7)
+
 A Claude Code skill that estimates how many **Actions** (Clay's platform-usage meter — what people mean by "action credits") a Clay workbook or table will consume before you run it at scale. It can also roll up an entire workspace, ranked by Action load, to show where credit spend concentrates.
 
 It reads live tables through the **official `clay` CLI** and applies Clay's documented billing model, so the estimate reflects real column configuration rather than a guess.
