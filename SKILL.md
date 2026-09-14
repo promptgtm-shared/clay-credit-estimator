@@ -13,7 +13,7 @@ thing users mean by "action credits."
 
 - Each **`action` column** costs **1 Action per record it runs on**, regardless of provider (including when you use your own API key).
 - **`basic`** (plain / formula) and **`source`** (sourcing / import) columns cost **0 Actions**.
-- Only **successful** returns are billed — so a 100% fire rate is an upper bound. A waterfall that resolves on provider 2 of 4 still bills 1 Action for that column.
+- Only steps that **return data** are billed — a provider step that returns nothing or errors is free, so a 100% fire rate is an upper bound. A waterfall bills **1 Action per returning provider step _and_ per validation step**, up to the one that validates (a validator bills on a valid *or* invalid result). Because Clay waterfalls are usually built as separate `Find` + `Validate` columns, counting each action column as 1 Action/row is accurate; a single **integrated** multi-provider waterfall column can bill more than 1 Action/row, which this tool would under-count.
 - A column with a **run condition** (`conditionalRunFormulaText`) only fires on a subset of rows; the script flags it (`*`) and discounts it by `--conditional-rate`.
 - **Data Credits** (marketplace data cost) are provider-dependent and cannot be read from the CLI, so they're **off by default**; `--dc-per-enrichment` gives a rough, clearly-labeled estimate.
 
